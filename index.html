@@ -3,10 +3,16 @@
 <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>AR Camera Test</title>
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/aframe/1.2.0/aframe.min.js"></script>
+    <title>AR GPS Model Viewer</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/aframe/1.4.1/aframe.min.js"></script>
     <script src="https://raw.githack.com/AR-js-org/AR.js/master/aframe/build/aframe-ar.js"></script>
     <style>
+        body {
+            margin: 0;
+            overflow: hidden;
+            font-family: Arial, sans-serif;
+        }
+        
         .arjs-loader {
             height: 100%;
             width: 100%;
@@ -25,39 +31,274 @@
             font-size: 1.25em;
             color: white;
         }
+        
+        #ui-container {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            padding: 10px;
+            background-color: rgba(0, 0, 0, 0.5);
+            color: white;
+            z-index: 999;
+        }
+        
+        #status, #location, #distance {
+            margin-bottom: 8px;
+            font-size: 14px;
+        }
+        
+        #distance {
+            font-weight: bold;
+        }
+        
+        /* Camera zoom adjustment */
+        .a-camera {
+            zoom: 0.8; /* Adjust this value to change camera zoom */
+        }
     </style>
 </head>
-<body style="margin: 0; overflow: hidden;">
+<body>
     <!-- Loading screen -->
     <div class="arjs-loader">
-        <div>Loading, please allow camera access...</div>
+        <div>Loading AR experience...</div>
     </div>
-
+    
+    <!-- UI Elements -->
+    <div id="ui-container">
+        <div id="status">Initializing...</div>
+        <div id="location">Current location: Waiting for GPS...</div>
+        <div id="distance">Distance to AR object: Calculating...</div>
+    </div>
+    
     <!-- A-Frame scene -->
     <a-scene
         vr-mode-ui="enabled: false"
         embedded
-        arjs="sourceType: webcam; debugUIEnabled: false;"
+        arjs="sourceType: webcam; debugUIEnabled: false; trackingMethod: best;"
     >
-        <!-- Just a simple box to confirm 3D rendering -->
-        <a-box position="0 0.5 -3" material="color: red;"></a-box>
+        <!-- Model -->
+        <a-assets>
+            <a-asset-item id="model" src="https://cdn.aframe.io/examples/ar/models/CesiumMan/CesiumMan.gltf"></a-asset-item>
+        </a-assets>
         
-        <!-- Camera with AR.js -->
+        <!-- AR model entities will be added here dynamically -->
+        
+        <!-- Camera -->
         <a-entity camera></a-entity>
     </a-scene>
-
+    
     <script>
-        // Hide loader when scene is loaded
+        // REPLACE THESE WITH YOUR ACTUAL MODEL COORDINATES AND DETAILS
+        const modelConfigs = [
+            {
+                id: "model-landmark-1",
+                lat: 37.7749, // Replace with your actual coordinates
+                lng: -122.4194, // Replace with your actual coordinates
+                scale: "0.5 0.5 0.5",
+                rotation: "0 0 0",
+                modelUrl: "#model", // Reference to the asset above
+                triggerDistance: 50 // Increased for testing purposes
+            }
+            // Add more models as needed
+        ];
+        
+        // Variables to store user's current location
+        let userLat = 0;
+        let userLng = 0;
+        
+        // DOM elements
         const scene = document.querySelector('a-scene');
         const loader = document.querySelector('.arjs-loader');
+        const statusEl = document.getElementById('status');
+        const locationEl = document.getElementById('location');
+        const distanceEl = document.getElementById('distance');
         
+        // Hide loader when scene is loaded
         scene.addEventListener('loaded', function () {
             loader.style.display = 'none';
+            init();
         });
+        
+        // Initialize the app
+        function init() {
+            statusEl.textContent = "Checking device capabilities...";
+            
+            // Check if device supports geolocation
+            if ('geolocation' in navigator) {
+                statusEl.textContent = "Device supports geolocation. Waiting for permission...";
+                
+                // Request one-time position to get initial location
+                navigator.geolocation.getCurrentPosition(function(position) {
+                    statusEl.textContent = "GPS initialized successfully!";
+                    updatePosition(position);
+                    
+                    // Then start watching position for continuous updates
+                    navigator.geolocation.watchPosition(updatePosition, handleLocationError, {
+                        enableHighAccuracy: true,
+                        maximumAge: 0,
+                        timeout: 5000
+                    });
+                    
+                }, handleLocationError, {
+                    enableHighAccuracy: true,
+                    timeout: 10000
+                });
+                
+            } else {
+                statusEl.textContent = "ERROR: Geolocation is not supported by this device.";
+            }
+            
+            // Create entities for all pre-defined models
+            modelConfigs.forEach(createModelEntity);
+            
+            // Start checking distance to models regularly
+            setInterval(checkDistanceToModels, 1000);
+        }
+        
+        // Update user's position when GPS data is received
+        function updatePosition(position) {
+            userLat = position.coords.latitude;
+            userLng = position.coords.longitude;
+            
+            locationEl.textContent = `Current location: ${userLat.toFixed(6)}, ${userLng.toFixed(6)}`;
+            statusEl.textContent = "Location tracking active";
+            
+            // Check distance to all models
+            checkDistanceToModels();
+        }
+        
+        // Handle geolocation errors
+        function handleLocationError(error) {
+            switch(error.code) {
+                case error.PERMISSION_DENIED:
+                    statusEl.textContent = "ERROR: Location permission denied. Please enable GPS.";
+                    break;
+                case error.POSITION_UNAVAILABLE:
+                    statusEl.textContent = "ERROR: Location information unavailable.";
+                    break;
+                case error.TIMEOUT:
+                    statusEl.textContent = "ERROR: Location request timed out.";
+                    break;
+                default:
+                    statusEl.textContent = "ERROR: An unknown error occurred.";
+                    break;
+            }
+        }
+        
+        // Calculate distance between two GPS coordinates in meters (Haversine formula)
+        function calculateDistance(lat1, lon1, lat2, lon2) {
+            const R = 6371e3; // Earth's radius in meters
+            const φ1 = lat1 * Math.PI / 180;
+            const φ2 = lat2 * Math.PI / 180;
+            const Δφ = (lat2 - lat1) * Math.PI / 180;
+            const Δλ = (lon2 - lon1) * Math.PI / 180;
+            
+            const a = Math.sin(Δφ / 2) * Math.sin(Δφ / 2) +
+                    Math.cos(φ1) * Math.cos(φ2) *
+                    Math.sin(Δλ / 2) * Math.sin(Δλ / 2);
+            const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+            
+            return R * c; // Distance in meters
+        }
+        
+        // Check distance to all models and show/hide based on proximity
+        function checkDistanceToModels() {
+            if (userLat === 0 && userLng === 0) return; // No valid user location yet
+            
+            let closestDistance = Infinity;
+            let modelVisible = false;
+            
+            modelConfigs.forEach(model => {
+                const distance = calculateDistance(userLat, userLng, model.lat, model.lng);
+                
+                // Get the entity for this model
+                const entity = document.getElementById(model.id);
+                if (!entity) return;
+                
+                // If model is within trigger distance, make it visible
+                if (distance <= model.triggerDistance) {
+                    if (!entity.getAttribute('visible')) {
+                        entity.setAttribute('visible', true);
+                        statusEl.textContent = `AR model found nearby! (${model.id})`;
+                    }
+                    
+                    // Calculate bearing to position model correctly
+                    const bearing = calculateBearing(userLat, userLng, model.lat, model.lng);
+                    
+                    // Position the model in the appropriate direction
+                    const distance3D = Math.min(distance, 5); // Cap the distance for better visualization
+                    
+                    // Convert polar coordinates (distance, bearing) to Cartesian
+                    const x = distance3D * Math.sin(bearing * Math.PI / 180);
+                    const z = -distance3D * Math.cos(bearing * Math.PI / 180);
+                    
+                    entity.setAttribute('position', `${x} 0 ${z}`);
+                    modelVisible = true;
+                } else {
+                    // Hide model if too far
+                    entity.setAttribute('visible', false);
+                }
+                
+                if (distance < closestDistance) {
+                    closestDistance = distance;
+                }
+            });
+            
+            // Update distance display
+            distanceEl.textContent = `Distance to nearest AR object: ${closestDistance.toFixed(1)} meters`;
+            
+            // Change text color based on proximity
+            if (closestDistance <= 20) {
+                distanceEl.style.color = '#4CAF50'; // Green when close
+            } else if (closestDistance <= 100) {
+                distanceEl.style.color = '#FFC107'; // Yellow when medium distance
+            } else {
+                distanceEl.style.color = 'white'; // Default color when far
+            }
+            
+            // Update status message if no models visible
+            if (!modelVisible && statusEl.textContent.includes("AR model found")) {
+                statusEl.textContent = "Location tracking active";
+            }
+        }
+        
+        // Calculate bearing between two GPS coordinates
+        function calculateBearing(lat1, lon1, lat2, lon2) {
+            const φ1 = lat1 * Math.PI / 180;
+            const φ2 = lat2 * Math.PI / 180;
+            const Δλ = (lon2 - lon1) * Math.PI / 180;
+            
+            const y = Math.sin(Δλ) * Math.cos(φ2);
+            const x = Math.cos(φ1) * Math.sin(φ2) -
+                    Math.sin(φ1) * Math.cos(φ2) * Math.cos(Δλ);
+            
+            const θ = Math.atan2(y, x);
+            
+            return (θ * 180 / Math.PI + 360) % 360; // Bearing in degrees
+        }
+        
+        // Create a new model entity
+        function createModelEntity(modelConfig) {
+            const scene = document.querySelector('a-scene');
+            
+            const entity = document.createElement('a-entity');
+            entity.id = modelConfig.id;
+            entity.setAttribute('gltf-model', modelConfig.modelUrl);
+            entity.setAttribute('scale', modelConfig.scale);
+            entity.setAttribute('rotation', modelConfig.rotation);
+            entity.setAttribute('visible', false);
+            entity.setAttribute('position', '0 0 -4'); // Default position until updated
+            
+            scene.appendChild(entity);
+            
+            return entity;
+        }
         
         // Basic error handling
         window.addEventListener('error', function(e) {
-            alert('Error: ' + e.message);
+            statusEl.textContent = 'Error: ' + e.message;
+            console.error(e);
         });
     </script>
 </body>
